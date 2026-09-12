@@ -6,6 +6,7 @@ from typing import AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -54,6 +55,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(lifespan=lifespan)
 
 
+def _write_usage_row(
+    request_id: str,
+    request_datetime: str,
+    path: str,
+    response_time: float,
+    status_code: int,
+) -> None:
+    with open(USAGE_LOG_PATH, "a", newline="") as file:
+        writer = csv.writer(file)
+        if file.tell() == 0:
+            writer.writerow(USAGE_LOG_HEADER)
+        writer.writerow(
+            [request_id, request_datetime, path, response_time, status_code]
+        )
+
+
 @app.middleware("http")
 async def log_usage(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -61,23 +78,24 @@ async def log_usage(
     request_id = uuid4().hex
     request_datetime = datetime.now(timezone.utc).isoformat()
     start_time = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        response_time = round(time.perf_counter() - start_time, 4)
+        _write_usage_row(
+            request_id, request_datetime, request.url.path, response_time, 500
+        )
+        raise
     response_time = round(time.perf_counter() - start_time, 4)
     response.headers["X-API-Request-ID"] = request_id
     response.headers["X-Response-Time"] = str(response_time)
-    with open(USAGE_LOG_PATH, "a", newline="") as file:
-        writer = csv.writer(file)
-        if file.tell() == 0:
-            writer.writerow(USAGE_LOG_HEADER)
-        writer.writerow(
-            [
-                request_id,
-                request_datetime,
-                request.url.path,
-                response_time,
-                response.status_code,
-            ]
-        )
+    _write_usage_row(
+        request_id,
+        request_datetime,
+        request.url.path,
+        response_time,
+        response.status_code,
+    )
     return response
 
 
@@ -144,7 +162,8 @@ async def generate_repaint(
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
-    out_audio, out_sample_rate = backend.repaint(
+    out_audio, out_sample_rate = await run_in_threadpool(
+        backend.repaint,
         audio=audio,
         sample_rate=sample_rate,
         start_time=params.start_time,
@@ -169,7 +188,8 @@ async def generate_edit(
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
-    out_audio, out_sample_rate = backend.edit(
+    out_audio, out_sample_rate = await run_in_threadpool(
+        backend.edit,
         audio=audio,
         sample_rate=sample_rate,
         tags=params.tags,
@@ -199,7 +219,8 @@ async def generate_extend(
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
-    out_audio, out_sample_rate = backend.extend(
+    out_audio, out_sample_rate = await run_in_threadpool(
+        backend.extend,
         audio=audio,
         sample_rate=sample_rate,
         left_extend_seconds=params.left_extend_seconds,
@@ -223,7 +244,11 @@ async def generate_audio2audio(
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
-    out_audio, out_sample_rate = backend.audio2audio(
-        audio=audio, sample_rate=sample_rate, tags=params.tags, lyrics=params.lyrics
+    out_audio, out_sample_rate = await run_in_threadpool(
+        backend.audio2audio,
+        audio=audio,
+        sample_rate=sample_rate,
+        tags=params.tags,
+        lyrics=params.lyrics,
     )
     return _audio_response(out_audio, out_sample_rate)

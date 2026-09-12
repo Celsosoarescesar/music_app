@@ -33,3 +33,11 @@ def test_invalid_backend_is_rejected(monkeypatch):
 
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None)
+
+
+def test_empty_checkpoint_path_env_becomes_none(monkeypatch):
+    monkeypatch.setenv("ACE_STEP_CHECKPOINT_PATH", "")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.ace_step_checkpoint_path is None
