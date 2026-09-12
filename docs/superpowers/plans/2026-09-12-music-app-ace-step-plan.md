@@ -1132,6 +1132,17 @@ git commit -m "feat: add text2music and retake endpoints"
 - Consumes: `app.schemas.RepaintParams`, `EditParams`, `ExtendParams`, `Audio2AudioParams` (Task 4); `app.utils.read_wav_upload`, `audio_array_to_wav_buffer` (Task 2); `MusicBackend.repaint`/`.edit`/`.extend`/`.audio2audio` (Task 3); `app.main._audio_response` (Task 7).
 - Produces: routes `POST /generate/repaint`, `POST /generate/edit`, `POST /generate/extend`, `POST /generate/audio2audio`.
 
+**Correction (recorded during Task 8 review, 2026-09-12):** the 4 routes below
+use `exc.errors(include_context=False)`, not the plain `exc.errors()` an
+earlier draft of this block had. When `RepaintParams`/`ExtendParams`'s
+cross-field `@model_validator` raises a plain `ValueError`, Pydantic embeds
+the raw exception object in each error's `ctx.error` key, which is not
+JSON-serializable — `exc.errors()` alone crashes FastAPI's response encoding
+with a `TypeError` on exactly the two rejection tests below
+(`test_repaint_rejects_start_after_end`, `test_extend_rejects_zero_extension`).
+`include_context=False` drops only the non-serializable `ctx` key; the
+human-readable message stays in `msg`.
+
 - [ ] **Step 1: Append the failing tests to `tests/test_api.py`**
 
 ```python
@@ -1288,7 +1299,7 @@ async def generate_repaint(
             start_time=start_time, end_time=end_time, tags=tags, lyrics=lyrics
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
     out_audio, out_sample_rate = backend.repaint(
@@ -1313,7 +1324,7 @@ async def generate_edit(
     try:
         params = EditParams(tags=tags, lyrics=lyrics, mode=mode)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
     out_audio, out_sample_rate = backend.edit(
@@ -1343,7 +1354,7 @@ async def generate_extend(
             lyrics=lyrics,
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
     out_audio, out_sample_rate = backend.extend(
@@ -1367,7 +1378,7 @@ async def generate_audio2audio(
     try:
         params = Audio2AudioParams(tags=tags, lyrics=lyrics)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     audio, sample_rate = _read_upload_or_400(await audio_file.read())
     backend: MusicBackend = request.app.state.backend
     out_audio, out_sample_rate = backend.audio2audio(
