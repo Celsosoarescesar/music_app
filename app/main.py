@@ -5,14 +5,22 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.backends.base import MusicBackend
 from app.backends.mock_backend import MockMusicBackend
-from app.schemas import RetakeRequest, Text2MusicRequest
+from app.schemas import (
+    Audio2AudioParams,
+    EditParams,
+    ExtendParams,
+    RepaintParams,
+    RetakeRequest,
+    Text2MusicRequest,
+)
 from app.settings import AppSettings
-from app.utils import audio_array_to_wav_buffer
+from app.utils import audio_array_to_wav_buffer, read_wav_upload
 
 USAGE_LOG_PATH = "usage.csv"
 USAGE_LOG_HEADER = [
@@ -110,3 +118,112 @@ def generate_retake(payload: RetakeRequest, request: Request) -> StreamingRespon
         variance=payload.variance,
     )
     return _audio_response(audio, sample_rate)
+
+
+def _read_upload_or_400(data: bytes):
+    try:
+        return read_wav_upload(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/generate/repaint", response_class=StreamingResponse)
+async def generate_repaint(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    start_time: float = Form(...),
+    end_time: float = Form(...),
+    tags: str = Form(...),
+    lyrics: str = Form(""),
+) -> StreamingResponse:
+    try:
+        params = RepaintParams(
+            start_time=start_time, end_time=end_time, tags=tags, lyrics=lyrics
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+    audio, sample_rate = _read_upload_or_400(await audio_file.read())
+    backend: MusicBackend = request.app.state.backend
+    out_audio, out_sample_rate = backend.repaint(
+        audio=audio,
+        sample_rate=sample_rate,
+        start_time=params.start_time,
+        end_time=params.end_time,
+        tags=params.tags,
+        lyrics=params.lyrics,
+    )
+    return _audio_response(out_audio, out_sample_rate)
+
+
+@app.post("/generate/edit", response_class=StreamingResponse)
+async def generate_edit(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    tags: str = Form(...),
+    lyrics: str = Form(""),
+    mode: str = Form("only_lyrics"),
+) -> StreamingResponse:
+    try:
+        params = EditParams(tags=tags, lyrics=lyrics, mode=mode)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+    audio, sample_rate = _read_upload_or_400(await audio_file.read())
+    backend: MusicBackend = request.app.state.backend
+    out_audio, out_sample_rate = backend.edit(
+        audio=audio,
+        sample_rate=sample_rate,
+        tags=params.tags,
+        lyrics=params.lyrics,
+        mode=params.mode,
+    )
+    return _audio_response(out_audio, out_sample_rate)
+
+
+@app.post("/generate/extend", response_class=StreamingResponse)
+async def generate_extend(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    left_extend_seconds: float = Form(0.0),
+    right_extend_seconds: float = Form(0.0),
+    tags: str = Form(""),
+    lyrics: str = Form(""),
+) -> StreamingResponse:
+    try:
+        params = ExtendParams(
+            left_extend_seconds=left_extend_seconds,
+            right_extend_seconds=right_extend_seconds,
+            tags=tags,
+            lyrics=lyrics,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+    audio, sample_rate = _read_upload_or_400(await audio_file.read())
+    backend: MusicBackend = request.app.state.backend
+    out_audio, out_sample_rate = backend.extend(
+        audio=audio,
+        sample_rate=sample_rate,
+        left_extend_seconds=params.left_extend_seconds,
+        right_extend_seconds=params.right_extend_seconds,
+        tags=params.tags,
+        lyrics=params.lyrics,
+    )
+    return _audio_response(out_audio, out_sample_rate)
+
+
+@app.post("/generate/audio2audio", response_class=StreamingResponse)
+async def generate_audio2audio(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    tags: str = Form(...),
+    lyrics: str = Form(""),
+) -> StreamingResponse:
+    try:
+        params = Audio2AudioParams(tags=tags, lyrics=lyrics)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+    audio, sample_rate = _read_upload_or_400(await audio_file.read())
+    backend: MusicBackend = request.app.state.backend
+    out_audio, out_sample_rate = backend.audio2audio(
+        audio=audio, sample_rate=sample_rate, tags=params.tags, lyrics=params.lyrics
+    )
+    return _audio_response(out_audio, out_sample_rate)
