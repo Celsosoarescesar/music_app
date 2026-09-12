@@ -6,10 +6,13 @@ from typing import AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
 
 from app.backends.base import MusicBackend
 from app.backends.mock_backend import MockMusicBackend
+from app.schemas import RetakeRequest, Text2MusicRequest
 from app.settings import AppSettings
+from app.utils import audio_array_to_wav_buffer
 
 USAGE_LOG_PATH = "usage.csv"
 USAGE_LOG_HEADER = [
@@ -73,3 +76,37 @@ async def log_usage(
 @app.get("/")
 def health_check() -> dict:
     return {"status": "healthy"}
+
+
+def _audio_response(audio, sample_rate: int) -> StreamingResponse:
+    buffer = audio_array_to_wav_buffer(audio, sample_rate)
+    return StreamingResponse(buffer, media_type="audio/wav")
+
+
+@app.post("/generate/text2music", response_class=StreamingResponse)
+def generate_text2music(payload: Text2MusicRequest, request: Request) -> StreamingResponse:
+    backend: MusicBackend = request.app.state.backend
+    audio, sample_rate = backend.text2music(
+        tags=payload.tags,
+        lyrics=payload.lyrics,
+        duration=payload.duration,
+        seed=payload.seed,
+        steps=payload.steps,
+        guidance_scale=payload.guidance_scale,
+    )
+    return _audio_response(audio, sample_rate)
+
+
+@app.post("/generate/retake", response_class=StreamingResponse)
+def generate_retake(payload: RetakeRequest, request: Request) -> StreamingResponse:
+    backend: MusicBackend = request.app.state.backend
+    audio, sample_rate = backend.retake(
+        tags=payload.tags,
+        lyrics=payload.lyrics,
+        duration=payload.duration,
+        seed=payload.seed,
+        steps=payload.steps,
+        guidance_scale=payload.guidance_scale,
+        variance=payload.variance,
+    )
+    return _audio_response(audio, sample_rate)
