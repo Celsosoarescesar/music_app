@@ -61,7 +61,7 @@ dependencies = [
 
 [project.optional-dependencies]
 kaggle = [
-    "acestep @ git+https://github.com/ace-step/ACE-Step.git",
+    "ace-step @ git+https://github.com/ace-step/ACE-Step.git",
     "pyngrok>=7.2",
 ]
 
@@ -78,9 +78,21 @@ testpaths = ["tests"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 ```
+
+**Correction (recorded during Task 1 review, 2026-09-12):** the distribution
+name is `ace-step` (its `setup.py` declares `name="ace_step"`, which PEP 503
+normalizes to `ace-step`), not `acestep` — the earlier draft of this block
+used the wrong name. The *importable Python module* is still `acestep`
+(`from acestep import ACEStep`, used in Task 5) — distribution name and
+module name differ, which is common in Python packaging. `[tool.hatch.metadata]
+allow-direct-references = true` was also added: hatchling rejects direct URL
+(`@ git+...`) dependencies without it.
 
 - [ ] **Step 3: Create `.gitignore`**
 
